@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  min-height: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background-color: #fafafc;
+  color: #111827;
+  font-family: inherit;
+}
+
+.dark body {
+  background-color: #020617;
+}
+
+::selection {
+  background: rgba(59, 130, 246, 0.2);
+  color: #0f172a;
+}
+
+textarea,
+button,
+input {
+  font: inherit;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
