@@ -5,14 +5,26 @@ import { v4 as uuidv4 } from "uuid";
 import api from "@/lib/axios";
 
 const SESSION_KEY = "currentSessionId";
+const SEARCH_HISTORY_KEY = "faqSearchHistory";
+const MAX_SEARCH_HISTORY = 5;
 
 const toMessages = (conversations = []) =>
   conversations.flatMap((conv) => {
     const baseId = conv._id || uuidv4();
     const createdAt = conv.createdAt || new Date().toISOString();
     return [
-      { _id: `${baseId}-user`, role: "user", content: conv.question || "", createdAt },
-      { _id: `${baseId}-ai`, role: "ai", content: conv.answer || "", createdAt },
+      {
+        _id: `${baseId}-user`,
+        role: "user",
+        content: conv.question || "",
+        createdAt,
+      },
+      {
+        _id: `${baseId}-ai`,
+        role: "ai",
+        content: conv.answer || "",
+        createdAt,
+      },
     ];
   });
 
@@ -25,10 +37,25 @@ export default function useChat() {
   const [error, setError] = useState(null);
   const [searchResults, setSearchResults] = useState([]);
   const [isSearchMode, setIsSearchMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [recentSearches, setRecentSearches] = useState([]);
 
   // Init session on mount
   useEffect(() => {
     const saved = window.localStorage.getItem(SESSION_KEY);
+    const savedSearches = window.localStorage.getItem(SEARCH_HISTORY_KEY);
+
+    if (savedSearches) {
+      try {
+        const parsed = JSON.parse(savedSearches);
+        if (Array.isArray(parsed)) {
+          setRecentSearches(parsed.filter((item) => typeof item === "string"));
+        }
+      } catch {
+        // ignore malformed search history
+      }
+    }
+
     if (saved) {
       setSessionId(saved);
     } else {
@@ -59,7 +86,9 @@ export default function useChat() {
       setSearchResults([]);
       setIsSearchMode(false);
     } catch (err) {
-      setError(err?.response?.data?.error || "Unable to load conversation history.");
+      setError(
+        err?.response?.data?.error || "Unable to load conversation history.",
+      );
     }
   }, []);
 
@@ -89,7 +118,10 @@ export default function useChat() {
       setIsLoading(true);
 
       try {
-        const res = await api.post("/api/chat", { question: trimmed, sessionId });
+        const res = await api.post("/api/chat", {
+          question: trimmed,
+          sessionId,
+        });
         const conv = res.data || {};
         const aiMsg = {
           _id: `${conv._id || uuidv4()}-ai`,
@@ -100,14 +132,16 @@ export default function useChat() {
         setMessages((prev) => [...prev, aiMsg]);
         loadSessions(); // refresh sidebar
       } catch (err) {
-        setError(err?.response?.data?.error || "Unable to send message right now.");
+        setError(
+          err?.response?.data?.error || "Unable to send message right now.",
+        );
         // remove optimistic user message on error
         setMessages((prev) => prev.filter((m) => m._id !== userMsg._id));
       } finally {
         setIsLoading(false);
       }
     },
-    [isLoading, sessionId, loadSessions]
+    [isLoading, sessionId, loadSessions],
   );
 
   const startNewChat = useCallback(() => {
@@ -130,7 +164,7 @@ export default function useChat() {
       setError(null);
       loadMessages(sid);
     },
-    [loadMessages]
+    [loadMessages],
   );
 
   const deleteSession = useCallback(
@@ -145,28 +179,44 @@ export default function useChat() {
         setError(err?.response?.data?.error || "Unable to delete session.");
       }
     },
-    [sessionId, loadSessions, startNewChat]
+    [sessionId, loadSessions, startNewChat],
   );
 
-  const searchChat = useCallback(
-    async (query) => {
-      const trimmed = query.trim();
-      if (!trimmed) {
-        setSearchResults([]);
-        setIsSearchMode(false);
-        return;
-      }
-      try {
-        setError(null);
-        const res = await api.get("/api/conversations/search", { params: { q: trimmed } });
-        setSearchResults(res.data?.conversations || []);
-        setIsSearchMode(true);
-      } catch (err) {
-        setError(err?.response?.data?.error || "Unable to search conversations.");
-      }
-    },
-    []
-  );
+  const searchChat = useCallback(async (query) => {
+    const trimmed = query.trim();
+    setSearchQuery(trimmed);
+    if (!trimmed) {
+      setSearchResults([]);
+      setIsSearchMode(false);
+      return;
+    }
+    try {
+      setError(null);
+      const res = await api.get("/api/conversations/search", {
+        params: { q: trimmed },
+      });
+      setSearchResults(res.data?.conversations || []);
+      setIsSearchMode(true);
+
+      setRecentSearches((prev) => {
+        const next = [
+          trimmed,
+          ...prev.filter(
+            (item) => item.toLowerCase() !== trimmed.toLowerCase(),
+          ),
+        ].slice(0, MAX_SEARCH_HISTORY);
+        window.localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next));
+        return next;
+      });
+    } catch (err) {
+      setError(err?.response?.data?.error || "Unable to search conversations.");
+    }
+  }, []);
+
+  const clearRecentSearches = useCallback(() => {
+    setRecentSearches([]);
+    window.localStorage.removeItem(SEARCH_HISTORY_KEY);
+  }, []);
 
   return {
     sessionId,
@@ -177,6 +227,9 @@ export default function useChat() {
     error,
     searchResults,
     isSearchMode,
+    searchQuery,
+    recentSearches,
+    clearRecentSearches,
     sendMessage,
     startNewChat,
     switchSession,

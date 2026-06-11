@@ -10,6 +10,35 @@ import InputBar from "@/components/InputBar";
 
 const DARK_MODE_KEY = "darkMode";
 
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const highlightText = (text, query, darkMode) => {
+  if (!text) return null;
+
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) return text;
+
+  const terms = [...new Set(normalizedQuery.split(/\s+/).filter(Boolean))];
+  const pattern = terms.map(escapeRegex).join("|");
+
+  if (!pattern) return text;
+
+  const parts = String(text).split(new RegExp(`(${pattern})`, "ig"));
+
+  return parts.map((part, index) =>
+    terms.some((term) => part.toLowerCase() === term.toLowerCase()) ? (
+      <mark
+        key={`${part}-${index}`}
+        className={`rounded px-0.5 ${darkMode ? "bg-amber-400/20 text-amber-200" : "bg-amber-200 text-amber-900"}`}
+      >
+        {part}
+      </mark>
+    ) : (
+      <span key={`${part}-${index}`}>{part}</span>
+    ),
+  );
+};
+
 export default function ChatWindow() {
   const {
     sessionId,
@@ -20,6 +49,9 @@ export default function ChatWindow() {
     error,
     searchResults,
     isSearchMode,
+    searchQuery,
+    recentSearches,
+    clearRecentSearches,
     sendMessage,
     startNewChat,
     switchSession,
@@ -81,8 +113,11 @@ export default function ChatWindow() {
           }}
           onDeleteSession={deleteSession}
           onSearch={searchChat}
+          onClearRecentSearches={clearRecentSearches}
           isSearchMode={isSearchMode}
           searchResults={searchResults}
+          searchQuery={searchQuery}
+          recentSearches={recentSearches}
           darkMode={darkMode}
         />
       </div>
@@ -188,12 +223,23 @@ export default function ChatWindow() {
                       <p
                         className={`font-medium ${darkMode ? "text-gray-200" : "text-gray-800"}`}
                       >
-                        {conv.question}
+                        {highlightText(conv.question, searchQuery, darkMode)}
+                      </p>
+                      <p
+                        className={`mt-1 text-[11px] uppercase tracking-[0.2em] ${darkMode ? "text-gray-500" : "text-gray-400"}`}
+                      >
+                        {conv.matchType === "text"
+                          ? "Exact match"
+                          : "Fuzzy match"}
                       </p>
                       <p
                         className={`mt-1 text-sm line-clamp-2 ${darkMode ? "text-gray-500" : "text-gray-400"}`}
                       >
-                        {conv.answer}
+                        {highlightText(
+                          conv.matchSnippet || conv.answer,
+                          searchQuery,
+                          darkMode,
+                        )}
                       </p>
                     </button>
                   ))}

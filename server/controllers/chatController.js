@@ -6,6 +6,29 @@ const groq = new Groq({
 });
 const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const buildSnippet = (conversation, terms) => {
+  const source =
+    `${conversation.question || ""} ${conversation.answer || ""}`.trim();
+  if (!source) return "";
+
+  const lowerSource = source.toLowerCase();
+  const firstMatch = terms
+    .map((term) => lowerSource.indexOf(term.toLowerCase()))
+    .find((index) => index >= 0);
+
+  if (firstMatch === undefined) {
+    return source.slice(0, 140);
+  }
+
+  const start = Math.max(0, firstMatch - 40);
+  const end = Math.min(source.length, firstMatch + 100);
+  const prefix = start > 0 ? "..." : "";
+  const suffix = end < source.length ? "..." : "";
+  return `${prefix}${source.slice(start, end)}${suffix}`;
+};
+
 // POST /api/chat
 const sendMessage = async (req, res, next) => {
   try {
@@ -163,17 +186,78 @@ const searchConversations = async (req, res, next) => {
       return res.status(400).json({ error: "Search query cannot be empty" });
     }
 
-    const filter = { $text: { $search: q.trim() } };
-    if (sessionId) filter.sessionId = sessionId;
+    const query = q.trim().replace(/\s+/g, " ");
+    const terms = query
+      .split(/\s+/)
+      .map((term) => term.trim())
+      .filter(Boolean);
 
-    const conversations = await Conversation.find(filter, {
-      score: { $meta: "textScore" },
-    })
+    const baseFilter = sessionId ? { sessionId } : {};
+
+    const textMatches = await Conversation.find(
+      { ...baseFilter, $text: { $search: query } },
+      {
+        score: { $meta: "textScore" },
+      },
+    )
       .sort({ score: { $meta: "textScore" } })
       .limit(20)
       .lean();
 
-    res.json({ conversations, query: q.trim() });
+    const regexFilter = terms.length
+      ? {
+          ...baseFilter,
+          $and: terms.map((term) => {
+            const safeTerm = escapeRegex(term);
+            return {
+              $or: [
+                { question: { $regex: safeTerm, $options: "i" } },
+                { answer: { $regex: safeTerm, $options: "i" } },
+              ],
+            };
+          }),
+        }
+      : null;
+
+    const regexMatches = regexFilter
+      ? await Conversation.find(regexFilter)
+          .sort({ createdAt: -1 })
+          .limit(20)
+          .lean()
+      : [];
+
+    const conversationsById = new Map();
+
+    for (const conversation of textMatches) {
+      conversationsById.set(String(conversation._id), {
+        ...conversation,
+        matchType: "text",
+        matchSnippet: buildSnippet(conversation, terms),
+      });
+    }
+
+    for (const conversation of regexMatches) {
+      const id = String(conversation._id);
+      if (!conversationsById.has(id)) {
+        conversationsById.set(id, {
+          ...conversation,
+          matchType: "fuzzy",
+          matchSnippet: buildSnippet(conversation, terms),
+        });
+      }
+    }
+
+    const conversations = Array.from(conversationsById.values()).sort(
+      (a, b) => {
+        if (a.matchType === b.matchType) {
+          return new Date(b.createdAt) - new Date(a.createdAt);
+        }
+
+        return a.matchType === "text" ? -1 : 1;
+      },
+    );
+
+    res.json({ conversations, query, terms });
   } catch (error) {
     next(error);
   }
